@@ -1,41 +1,55 @@
 #!/bin/python3
 import argparse
 import os
-import openai
 import tkinter as tk
 from tkinter import ttk
+
+import openai
+
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
-def ask_question(model, question):
-    response = ""
-    for chunk in openai.ChatCompletion.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": "you are a helpful assistant. If using backticks to delimit a programming or bash shell block, specify a language like '```python'",
-            },
-            {"role": "user", "content": question},
-        ],
-        stream=True,
-    ):
+class ChatClient:
+    @staticmethod
+    def chat_stream(model, question):
+        for chunk in openai.ChatCompletion.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": """you are a helpful assistant. If using backtick to delimit a programming or bash shell block, specify a language like '```python'""",
+                },
+                {"role": "user", "content": question},
+            ],
+            stream=True,
+        ):
+            yield chunk
+
+    def __init__(self, model, question):
+        self.model = model
+        self.question = question
+        self.stream = self.chat_stream(self.model, self.question)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        chunk = next(self.stream)
         if chunk["object"] == "chat.completion.chunk":
             content = chunk["choices"][0]["delta"].get("content", "")
-            response += content
-    return response
+            return content
+        else:
+            return next(self)
 
 
 class GUI:
-    def __init__(self, question, answer):
-        self.answer = answer
-
+    def __init__(self, question, chat_client):
         self.root = tk.Tk()
-        self.root.configure(bg="white")  # Set window background to white
+        self.root.configure(bg="white")
         self.root.title("AI Answer")
+        self.chat_client = chat_client
 
-        # Set up a custom style for the frame background color
         style = ttk.Style()
         style.configure("Custom.TFrame", background="white")
         self.frame = ttk.Frame(self.root, padding="10", style="Custom.TFrame")
@@ -51,12 +65,27 @@ class GUI:
 
         self.answer_text = self.create_answer_text()
 
+    def process_next_chunk(self):
+        try:
+            content = next(self.chat_client)
+            self.append_to_answer(content)
+        except StopIteration:
+            return
+
+        self.root.after(100, self.process_next_chunk)
+
+    def append_to_answer(self, content):
+        self.update_ui(self.answer_text.config, state=tk.NORMAL)
+        self.update_ui(self.answer_text.insert, tk.END, content)
+        self.update_ui(self.answer_text.config, state=tk.DISABLED)
+
+    def update_ui(self, func, *args, **kwargs):
+        self.root.after(0, lambda: func(*args, **kwargs))
+
     def create_answer_text(self):
-        # Create a Scrollbar widget
         scrollbar = tk.Scrollbar(self.frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Add the 'yscrollcommand' argument to the Text widget and link it to the Scrollbar
         answer_text = tk.Text(
             self.frame,
             wrap=tk.WORD,
@@ -64,21 +93,29 @@ class GUI:
             highlightthickness=0,
             yscrollcommand=scrollbar.set,
         )
-        answer_text.insert(tk.END, self.answer)
+        # answer_text.insert(tk.END, self.answer)
         answer_text.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         answer_text.config(state=tk.DISABLED)
 
-        # Configure the Scrollbar to control the Text widget
         scrollbar.config(command=answer_text.yview)
         return answer_text
 
     def run(self):
+        self.process_next_chunk()
         self.root.mainloop()
 
 
-def show_gui(question, answer):
-    gui = GUI(question, answer)
-    gui.run()
+class TUI:
+    def __init__(self, chat_client):
+        self.chat_client = chat_client
+
+    def append_to_answer(self, content):
+        print(content, end="")
+
+    def run(self):
+        for content in self.chat_client:
+            self.append_to_answer(content)
+        print()
 
 
 def main():
@@ -95,12 +132,13 @@ def main():
     parser.add_argument("question", help="The question to ask")
     args = parser.parse_args()
 
-    answer = ask_question(args.model, args.question)
-
+    chat_client = ChatClient(args.model, args.question)
     if args.gui:
-        show_gui(args.question, answer)
+        ui = GUI(args.question, chat_client)
     else:
-        print(answer)
+        ui = TUI(chat_client)
+
+    ui.run()
 
 
 if __name__ == "__main__":
