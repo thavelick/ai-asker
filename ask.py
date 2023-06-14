@@ -11,32 +11,31 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 class ChatClient:
-    @staticmethod
-    def chat_stream(model, question):
+    def chat_stream(self):
         for chunk in openai.ChatCompletion.create(
-            model=model,
+            model=self.model,
             messages=[
-                {
-                    "role": "system",
-                    "content": """you are a helpful assistant. If using backtick to delimit a programming or bash shell block, specify a language like '```python'""",
-                },
-                {"role": "user", "content": question},
+                {"role": "user", "content": f"{self.question} {self.prompt}"},
             ],
             stream=True,
+            temperature=0.7,
+            max_tokens=512,
         ):
             yield chunk
 
-    def __init__(self, model, question):
+    def __init__(self, model, question, prompt):
         self.model = model
         self.question = question
-        self.stream = self.chat_stream(self.model, self.question)
+        self.prompt = prompt
+        self.stream = self.chat_stream()
 
     def __iter__(self):
         return self
 
     def __next__(self):
         chunk = next(self.stream)
-        if chunk["object"] == "chat.completion.chunk":
+
+        if chunk.get("object") == "chat.completion.chunk":
             content = chunk["choices"][0]["delta"].get("content", "")
             return content
         else:
@@ -119,6 +118,21 @@ class TUI:
 
 
 def main():
+    prompts = {
+        "general": "",
+        "explain": """ ***
+        Write a footnote explaining preceding text. Things you could think about explaining are:
+        * You know history, science and philosophy up to about 2020.
+        * Thus you know and can explain historical figures, obscure science, companies etc.
+        * Define any arcane vocabulary that appears, if present. (if there aren't any, just ignore this part)
+        * Also translate any non-english phrases. (if there aren't any, just ignore this part)
+        * Generally, help the user understand any context I need to make sense of the text.
+
+        Not everything there is necessarily needed. For instance if there is no arcane vocabulary
+        or non-english text, you shouldn't mention anything about those items
+        """,
+    }
+
     parser = argparse.ArgumentParser(description="Ask a question to ChatGPT")
     parser.add_argument(
         "-m",
@@ -130,9 +144,13 @@ def main():
         "--gui", action="store_true", help="Show the answer in a GUI window"
     )
     parser.add_argument("question", help="The question to ask")
+    parser.add_argument(
+        "--prompt", help="Which predefined prompt to use", default="general"
+    )
     args = parser.parse_args()
 
-    chat_client = ChatClient(args.model, args.question)
+    prompt = prompts.get(args.prompt, prompts["general"])
+    chat_client = ChatClient(args.model, args.question, prompt)
     if args.gui:
         ui = GUI(args.question, chat_client)
     else:
