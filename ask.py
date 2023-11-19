@@ -4,15 +4,14 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
-import openai
+from openai import OpenAI
 
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 class ChatClient:
     def chat_stream(self):
-        for chunk in openai.ChatCompletion.create(
+        stream = client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "user", "content": f"{self.question} {self.prompt}"},
@@ -20,7 +19,8 @@ class ChatClient:
             stream=True,
             temperature=0.7,
             max_tokens=512,
-        ):
+        )
+        for chunk in stream:
             yield chunk
 
     def __init__(self, model, question, prompt):
@@ -34,9 +34,8 @@ class ChatClient:
 
     def __next__(self):
         chunk = next(self.stream)
-
-        if chunk.get("object") == "chat.completion.chunk":
-            content = chunk["choices"][0]["delta"].get("content", "")
+        if chunk.object == "chat.completion.chunk":
+            content = chunk.choices[0].delta.content or ""
             return content
         else:
             return next(self)
