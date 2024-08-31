@@ -1,9 +1,10 @@
-#!/bin/python3
+#!/usr/bin/env python
 import argparse
 import os
+import datetime
 import tkinter as tk
 from tkinter import ttk
-
+from duckduckgo_search import DDGS
 from openai import OpenAI
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -23,7 +24,7 @@ class ChatClient:
         for chunk in stream:
             yield chunk
 
-    def __init__(self, model, question, prompt):
+    def __init__(self, model, question, prompt=""):
         self.model = model
         self.question = question
         self.prompt = prompt
@@ -111,9 +112,89 @@ class TUI:
         print(content, end="")
 
     def run(self):
-        for content in self.chat_client:
-            self.append_to_answer(content)
-        print()
+        classification = classify_query(self.chat_client.question)
+        print(classification)
+
+        if classification == "general-knowledge-llm":
+            for content in self.chat_client:
+                self.append_to_answer(content)
+            print()
+        elif classification == "general-internet-search":
+            do_general_internet_search(
+                self.chat_client.question, self.chat_client.model
+            )
+        else:
+            print("not implemented: ", classification)
+
+
+def classify_query(query):
+    engine_choices = [
+        "general-knowledge-llm",
+        # "wikipedia",
+        "general-internet-search",
+        # "news-internet-search",
+    ]
+    classify_template = f"""
+    <query>{query}</query>
+    For the preceding query, don't answer but determine which of the following will provide the
+    best answer to it from:
+    [{", ".join(engine_choices)}].
+    Output your answer inside <engine>...</engine> tags
+    """
+    chat_client = ChatClient("gpt-4o-mini", classify_template)
+
+    classify_response = "".join(list(chat_client))
+
+    # pull the engine choice from the tag in the response
+    try:
+        return classify_response.split("<engine>")[1].split("</engine>")[0]
+    except IndexError:
+        print(
+            "Warning: Could not determine engine choice. Defaulting to general-knowledge-llm"
+        )
+        return "general-knowledge-llm"
+
+
+def get_query_for_question(question):
+    prompt = """
+    <date>{date}</date>
+    <query>{question}</query>
+    For the preceding query, if necessary, rewrite it as appropriate for use in an
+    internet search engine. Output in <search>...</search> tags
+    """
+    date = datetime.datetime.now().isoformat()
+    chat_client = ChatClient("gpt-4o-mini", prompt.format(date=date, question=question))
+    search_query_response = "".join(list(chat_client))
+    return search_query_response.split("<search>")[1].split("</search>")[0]
+
+
+def do_general_internet_search(question, model):
+    query_for_question = get_query_for_question(question)
+    print("searching for: ", query_for_question)
+    results = DDGS().text(query_for_question, max_results=3)
+    result_tempate = """
+    <result>
+        <title>{title}</title>
+        <href>{href}</href>
+        <body>{body}</body>
+    </result>
+    """
+    results = "\n".join(
+        [
+            result_tempate.format(title=r["title"], href=r["href"], body=r["body"])
+            for r in results
+        ]
+    )
+
+    prompt = f"""
+    {results}
+    Given the search results above, {question}
+    """
+    print("prompt: ", prompt)
+    chat_client = ChatClient(model, prompt)
+    for content in chat_client:
+        print(content, end="")
+    print()
 
 
 def main():
@@ -124,7 +205,7 @@ def main():
         * You know history, science and philosophy up to about 2020.
         * Thus you know and can explain historical figures, obscure science, companies etc.
         * Define any arcane vocabulary that appears, if present. (if there aren't any, just ignore this part)
-        * Also translate any non-english phrases. (if there aren't any, just ignore this part)
+        * Also translate any non-English phrases. (if there aren't any, just ignore this part)
         * Generally, help the user understand any context I need to make sense of the text.
 
         Not everything there is necessarily needed. For instance if there is no arcane vocabulary
