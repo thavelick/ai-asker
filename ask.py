@@ -133,11 +133,12 @@ def main():
     }
 
     parser = argparse.ArgumentParser(description="Ask a question to ChatGPT")
+    default_model = "gpt-4o-mini"
     parser.add_argument(
         "-m",
         "--model",
-        default="gpt-3.5-turbo",
-        help="The model to use (default: gpt-3.5-turbo)",
+        default=default_model,
+        help=f"The model to use (default: {default_model})",
     )
     parser.add_argument(
         "--gui", action="store_true", help="Show the answer in a GUI window"
