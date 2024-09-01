@@ -2,6 +2,7 @@
 import argparse
 import os
 import datetime
+import subprocess
 import tkinter as tk
 from tkinter import ttk
 from duckduckgo_search import DDGS
@@ -123,6 +124,8 @@ class TUI:
             do_general_internet_search(
                 self.chat_client.question, self.chat_client.model
             )
+        elif classification == "image-search":
+            do_image_search(self.chat_client.question)
         else:
             print("not implemented: ", classification)
 
@@ -132,6 +135,7 @@ def classify_query(query):
         "general-knowledge-llm",
         # "wikipedia",
         "general-internet-search",
+        "image-search",
         # "news-internet-search",
     ]
     classify_template = f"""
@@ -166,6 +170,15 @@ def get_query_for_question(question):
     chat_client = ChatClient("gpt-4o-mini", prompt.format(date=date, question=question))
     search_query_response = "".join(list(chat_client))
     return search_query_response.split("<search>")[1].split("</search>")[0]
+
+
+def do_image_search(question):
+    query_for_question = get_query_for_question(question)
+    print("image searching for: ", query_for_question)
+    results = DDGS().images(query_for_question, max_results=3)
+
+    for r in results:
+        subprocess.run(["img2sixel", r["thumbnail"]])
 
 
 def do_general_internet_search(question, model):
