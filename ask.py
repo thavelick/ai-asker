@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk
 from duckduckgo_search import DDGS
 from openai import OpenAI
+from sentence_transformers import SentenceTransformer, util
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -163,13 +164,51 @@ def get_query_for_question(question):
     prompt = """
     <date>{date}</date>
     <query>{question}</query>
-    For the preceding query, if necessary, rewrite it as appropriate for use in an
-    internet search engine. Output in <search>...</search> tags
+    For the preceding query, rewrite it as appropriate for use as a query on duck duck go. Don't
+    just parrot the question, try to determine relevant search keywords. Remember boolean search
+    doesn't work on search engines like DDG. Output in <search>...</search> tags
     """
     date = datetime.datetime.now().isoformat()
     chat_client = ChatClient("gpt-4o-mini", prompt.format(date=date, question=question))
     search_query_response = "".join(list(chat_client))
     return search_query_response.split("<search>")[1].split("</search>")[0]
+
+
+def get_markdown_for_url(url, word_limit=1000):
+    html2md_path = os.path.expanduser("~/go/bin/html2md")
+    # First, let's make sure html2md_path exists
+    assert os.path.exists(html2md_path)
+
+    # Next, let's convert the URL to markdown
+    text = subprocess.run(
+        [html2md_path, "-i", url], capture_output=True, text=True
+    ).stdout
+
+    # Finally, let's limit the text to a certain number of words. If we cut off the output,
+    # add ... to the end of the text
+    words = text.split()
+    if len(words) > word_limit:
+        words = words[:word_limit]
+        words.append("...")
+    return " ".join(words)
+
+
+def get_relevant_text_for_url(url, question):
+    print("calculating relevant text for: ", url)
+    full_text = get_markdown_for_url(url)
+    chunk_size = 8000
+    chunks = [
+        full_text[i : i + chunk_size] for i in range(0, len(full_text), chunk_size)
+    ]
+    if len(chunks) < 1:
+        return ""
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    question_embedding = model.encode([question])
+    chunk_embeddings = model.encode(chunks)
+    similarities = util.pytorch_cos_sim(question_embedding, chunk_embeddings)
+    most_similar_chunk = chunks[similarities.argmax().item()]
+    return most_similar_chunk
 
 
 def do_image_search(question):
@@ -184,26 +223,38 @@ def do_image_search(question):
 def do_general_internet_search(question, model):
     query_for_question = get_query_for_question(question)
     print("searching for: ", query_for_question)
-    results = DDGS().text(query_for_question, max_results=3)
+    results = DDGS().text(query_for_question, max_results=8)
     result_tempate = """
     <result>
         <title>{title}</title>
         <href>{href}</href>
-        <body>{body}</body>
+        <full_text>
+        {full_text}
+        </full_text>
     </result>
     """
-    results = "\n".join(
+    result_text = "\n".join(
         [
-            result_tempate.format(title=r["title"], href=r["href"], body=r["body"])
-            for r in results
+            result_tempate.format(
+                title=r["title"],
+                href=r["href"],
+                full_text=get_relevant_text_for_url(r["href"], question),
+            )
+            # reverse the order, so that the most relevant result will be at the bottom,
+            # closest to the user's query
+            for r in results  # [::-1]
         ]
     )
 
     prompt = f"""
-    {results}
-    Given the search results above, {question}
+    {result_text}
+    <date>{datetime.datetime.now().isoformat()}</date>
+    Given the search results above, {question}.
+
+    Some of the results may not be relevant to the question, so you may need to ignore some of them.
+    If multiple results are relevant, summarize them into a single coherent answer.
+    Note that the user can't see the search results directly.
     """
-    print("prompt: ", prompt)
     chat_client = ChatClient(model, prompt)
     for content in chat_client:
         print(content, end="")
